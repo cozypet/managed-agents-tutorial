@@ -58,6 +58,29 @@
 
 <hr>
 
+<h2>What We're Building</h2>
+
+<p>You run an online electronics store. You sell 10 products: AirPods, Sony headphones, a Dyson vacuum, Samsung and Pixel phones, a MacBook, an LG TV, Bose headphones, a Nintendo Switch, and a Kindle. Your prices are set quarterly. The problem: you have no idea whether you're competitive right now. Amazon, Best Buy, and Walmart adjust prices daily. By the time you check manually, the data is stale.</p>
+
+<p>The agent we're building solves this. You give it a CSV of your product catalog (name, SKU, your price, category). It takes that catalog, searches the web for current prices at each of the three competitors, compares them against your prices, flags every product where you're more than 15% above the lowest competitor, and writes a structured markdown report with a summary table, per-product breakdowns, and pricing recommendations.</p>
+
+<p>Here's what makes this a good test of Managed Agents specifically. It exercises the full toolset: <strong>web search</strong> (30 searches across 3 retailers for 10 products), <strong>file operations</strong> (reading the catalog, writing the report), and <strong>bash</strong> (data processing). It runs long enough to demonstrate session persistence (6 to 8 minutes of active work). And the output is structured enough to test with a rubric: did it cover all 10 products? Did it flag the right ones? Did it include revenue impact estimates?</p>
+
+<p>The input looks like this:</p>
+
+<pre><code>product_name,sku,your_price,category
+Apple AirPods Pro 2,APD-001,289.99,Audio
+Sony WH-1000XM5,SNY-002,378.00,Audio
+Dyson V15 Detect,DYS-003,749.99,Home
+Samsung Galaxy S25 Ultra,SAM-004,1349.00,Mobile
+...</code></pre>
+
+<p>The output is a markdown report at <code>/mnt/session/outputs/price_report.md</code> containing a comparison table, flagged items, and actionable recommendations. The Outcomes grader then scores that report against a rubric you define.</p>
+
+<p>Six steps to get there. Let's start with the architecture.</p>
+
+<hr>
+
 <h2>What Managed Agents Actually Is</h2>
 
 <p>Most coverage of Managed Agents describes it as "hosted agents." That's accurate but shallow. The architectural insight underneath is more interesting.</p>
