@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Build, Stream, Test: Your First Claude Managed Agent in 30 Minutes</title>
+<style>
+  body { font-family: Georgia, serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #1a1a1a; }
+  h1 { font-size: 32px; line-height: 1.2; margin-bottom: 8px; }
+  h2 { font-size: 24px; margin-top: 40px; }
+  h3 { font-size: 20px; margin-top: 32px; }
+  p { margin: 16px 0; }
+  img { max-width: 100%; height: auto; margin: 24px 0; }
+  pre { background: #f5f5f5; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 14px; line-height: 1.5; }
+  code { font-family: 'Courier New', monospace; font-size: 14px; }
+  blockquote { border-left: 3px solid #ccc; padding-left: 16px; margin-left: 0; color: #555; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; }
+  th { background: #f5f5f5; }
+  hr { border: none; border-top: 1px solid #eee; margin: 32px 0; }
+  .subtitle { font-size: 18px; color: #666; margin-bottom: 32px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>Build, Stream, Test: Your First Claude Managed Agent in 30 Minutes</h1>
+<p class="subtitle">A hands-on Python tutorial for building a competitive price monitor, from first API call to automated quality grading</p>
+
+<p>You built an AI agent. It works in a notebook. Your demo went well.</p>
+
+<p>Now ship it.</p>
+
+<p>That means sandboxed execution so it can't trash your production database. Credential isolation so a prompt injection can't steal your API keys. State management so a disconnection doesn't lose an hour of work. Error recovery. Tracing. Scaling.</p>
+
+<p>Three months of infrastructure work, minimum. And that's before your first user sees anything.</p>
+
+<p>Claude Managed Agents, which launched in public beta on April 9, 2026, eliminates that entire layer. You define the agent. Anthropic runs it. This tutorial walks you through the complete pipeline: build a competitive price monitor that researches real products across the web, stream its work in real time, and then test its output with a built-in grading system that almost nobody is talking about yet.</p>
+
+<hr>
+
+<h2>Before we start!</h2>
+
+<p>🦸🏻‍♀️ If this helps you ship better AI systems:<br>
+👏 Clap 50 times (yes, you can!) — Medium's algorithm favors this, increasing visibility to others who then discover the article.<br>
+🔔 Follow me on <a href="https://medium.com/@han.heloir">Medium</a>, <a href="https://www.linkedin.com/in/hanheloiryan/">LinkedIn</a> and <a href="https://medium.com/@han.heloir/about">subscribe</a> to get my latest article.</p>
+
+<hr>
+
+<h2>TL;DR</h2>
+
+<ul>
+<li>Claude Managed Agents is Anthropic's hosted service for running autonomous agents. You define the brain (model + prompt + tools), Anthropic handles the infrastructure (containers, sandboxing, state, error recovery).</li>
+<li>The API has four primitives: <strong>Agent</strong>, <strong>Environment</strong>, <strong>Session</strong>, and <strong>Events</strong>. You can go from zero to a working agent in five API calls.</li>
+<li>This tutorial builds a <strong>competitive price monitor</strong> that takes a product catalog, web-searches competitor prices across Amazon, Best Buy, and Walmart, and produces a pricing analysis report.</li>
+<li>The real differentiator: the <strong>Outcomes</strong> system lets you define a grading rubric, and a separate AI grader (with its own context window) evaluates your agent's output and tells it to revise until the rubric is satisfied.</li>
+<li>Pricing is consumption-based: standard Claude token rates plus $0.08 per session-hour of active runtime.</li>
+</ul>
+
+<hr>
+
+<h2>What Managed Agents Actually Is</h2>
+
+<p>Most coverage of Managed Agents describes it as "hosted agents." That's accurate but shallow. The architectural insight underneath is more interesting.</p>
+
+<p>Anthropic's engineering team decomposed an agent into three independent components: the <strong>brain</strong> (Claude plus its orchestration harness), the <strong>hands</strong> (sandboxed containers where code runs and files get written), and the <strong>session</strong> (a durable, append-only log of everything that happened). Each component can fail, restart, or be replaced without disturbing the others.</p>
+
+<p>This is the same pattern operating systems used decades ago. The <code>read()</code> system call doesn't care whether it's reading from a 1970s disk pack or a modern SSD. The abstraction outlasts the hardware. Managed Agents applies that same principle: the interfaces stay stable while the implementations (harnesses, sandboxes, models) evolve underneath.</p>
+
+<figure>
+<img src="https://www-cdn.anthropic.com/images/4zrzovbb/website/903b624ada206b10753a24c6a1367e74a869165d-1080x1080.png" alt="Anthropic — The three virtualized components of Managed Agents">
+<figcaption>Image: Anthropic — The three virtualized components: session, harness, and sandbox</figcaption>
+</figure>
+
+<p>The diagram above (from Anthropic's engineering blog) shows how these three components are virtualized behind stable interfaces. The session stores every event durably. The harness runs the agent loop and routes tool calls. The sandbox executes code in isolation. Each can be swapped, restarted, or scaled independently.</p>
+
+<p>The critical architectural decision: the brain calls the hands the same way it calls any other tool: <code>execute(name, input) → string</code>. If a container dies, the harness catches it as a tool-call error and provisions a new one. Credentials never reach the sandbox. Auth tokens live in a secure vault and get injected at the proxy level, never exposed to agent-generated code.</p>
+
+<figure>
+<img src="https://www-cdn.anthropic.com/images/4zrzovbb/website/73e900af5b9d6ed8c64db0a8e74d4465963556b7-1640x1596.png" alt="Anthropic — Decoupled architecture with security boundary">
+<figcaption>Image: Anthropic — Decoupled architecture with security boundary</figcaption>
+</figure>
+
+<p>The official product architecture diagram from Anthropic's launch blog captures this in one view:</p>
+
+<figure>
+<img src="https://cdn.prod.website-files.com/68a44d4040f98a4adf2207b6/69d53a1b570fa207204f0111_Claude-Blog-Managed-Agents-Diagram-NoBorder.png" alt="Anthropic — Claude Managed Agents architecture">
+<figcaption>Image: Anthropic — Claude Managed Agents architecture</figcaption>
+</figure>
+
+<p>For you as a developer, this architecture collapses into four API primitives:</p>
+
+<figure>
+<img src="images/diagram-01.png" alt="The Four API Primitives">
+<figcaption>Image by Author — The four API primitives: Agent, Environment, Session, Events</figcaption>
+</figure>
+
+<p><strong>Agent</strong> is the configuration: which model, what system prompt, which tools are available. Create it once, reference it by ID forever.</p>
+
+<p><strong>Environment</strong> is the container template: pre-installed packages, network access rules, mounted files. Also created once and reused.</p>
+
+<p><strong>Session</strong> is a running instance that pairs an Agent with an Environment. It's where work happens. Sessions persist through disconnections and can run for hours.</p>
+
+<p><strong>Events</strong> are the communication channel. You send user messages in. The agent streams tool calls, text, and status updates out. The event log is durable and lives outside both the brain and the hands.</p>
+
+<p>Here's how all of that maps to the price monitor we're about to build:</p>
+
+<figure>
+<img src="images/diagram-02.png" alt="Architecture Map: Price Monitor">
+<figcaption>Image by Author — The complete architecture mapped to the price monitor use case</figcaption>
+</figure>
+
+<p>One positioning note before we dive in. Anthropic now offers three ways to build with Claude. The <strong>Messages API</strong> gives you raw model access and you build the agent loop yourself. The <strong>Agent SDK</strong> gives you Claude Code as a library with built-in tools. <strong>Managed Agents</strong> gives you the full stack: Anthropic runs the loop, the sandbox, the state, and the error recovery. This tutorial focuses entirely on Managed Agents.</p>
+
+<hr>
+
+<h2>Prerequisites and Setup</h2>
+
+<p>You need three things:</p>
+
+<ol>
+<li>An Anthropic API key from the <a href="https://platform.claude.com/settings/keys">Claude Console</a></li>
+<li>Python 3.10+</li>
+<li>The latest Anthropic Python SDK</li>
+</ol>
+
+<pre><code>pip install anthropic</code></pre>
+
+<p>Set your API key:</p>
+
+<pre><code>export ANTHROPIC_API_KEY="your-api-key-here"</code></pre>
+
+<p>Every Managed Agents request requires the <code>managed-agents-2026-04-01</code> beta header. The Python SDK sets this automatically when you use the beta namespace, so you won't need to manage it manually.</p>
+
+<p>Quick verification that your setup works:</p>
+
+<pre><code class="language-python">import anthropic
+
+client = anthropic.Anthropic()
+# If this runs without error, you're ready
+print("SDK version:", anthropic.__version__)</code></pre>
+
+<hr>
+
+<h2>Step 1: Create Your Agent</h2>
+
+<p>An Agent is a reusable configuration object. It defines three things: which model thinks, what instructions it follows, and which tools it can use. No compute runs when you create an Agent. It's a blueprint.</p>
+
+<figure>
+<img src="images/diagram-03.png" alt="Anatomy of an Agent">
+<figcaption>Image by Author — The three fields that define an Agent</figcaption>
+</figure>
+
+<p>Here's the Agent for our competitive price monitor:</p>
+
+<pre><code class="language-python">agent = client.beta.managed_agents.agents.create(
+    name="Price Monitor",
+    model="claude-sonnet-4-6",
+    system="""You are a competitive pricing analyst. Given a product 
+    catalog CSV, research current prices for each product across 
+    Amazon, Best Buy, and Walmart using web search. 
+    
+    For each product:
+    1. Search for the exact product name + retailer
+    2. Record the lowest price found at each retailer
+    3. Compare against the catalog price
+    4. Flag any product where the catalog price exceeds 
+       the lowest competitor price by more than 15%
+    
+    Output a markdown report to /mnt/session/outputs/price_report.md 
+    with a summary table and detailed findings per product.""",
+    tools=[{"type": "agent_toolset_20260401"}]
+)
+
+print(f"Agent ID: {agent.id}")</code></pre>
+
+<p>The <code>agent_toolset_20260401</code> tool type is the key line. It enables the full suite of built-in tools: bash commands, file read/write/edit, web search, web fetch, and more. You don't need to define each tool individually. The agent decides which ones to use based on the task.</p>
+
+<figure>
+<img src="images/diagram-04.png" alt="The Built-in Toolset">
+<figcaption>Image by Author — Everything enabled by agent_toolset_20260401</figcaption>
+</figure>
+
+<p>Two things worth noting about the system prompt. First, the output path <code>/mnt/session/outputs/</code> is where the agent writes deliverables you can retrieve later via the Files API. Second, the instructions are specific about methodology (search per retailer, flag at 15% threshold). Vague system prompts produce vague results. The more concrete your instructions, the more testable your agent becomes. This matters when we get to the Outcomes section.</p>
+
+<p>Save <code>agent.id</code>. You'll reference it every time you start a session.</p>
+
+<hr>
+
+<h2>Step 2: Configure the Environment</h2>
+
+<p>The Environment defines the container where the agent's code actually runs. It's separate from the Agent because the same brain might need different containers for different tasks. A data analysis agent might need one environment with pandas pre-installed and another with R.</p>
+
+<figure>
+<img src="images/diagram-05.png" alt="Environment Configuration">
+<figcaption>Image by Author — What the environment provides</figcaption>
+</figure>
+
+<p>For our price monitor, the setup is minimal:</p>
+
+<pre><code class="language-python">environment = client.beta.managed_agents.environments.create(
+    name="price-monitor-env",
+    config={
+        "type": "cloud",
+        "networking": {"type": "unrestricted"}
+    }
+)
+
+print(f"Environment ID: {environment.id}")</code></pre>
+
+<p>We set networking to <code>unrestricted</code> because the agent needs to perform web searches for competitor prices. In a more locked-down scenario, you could restrict network access to specific domains:</p>
+
+<pre><code class="language-python"># Alternative: restrict to specific retailers
+"networking": {
+    "type": "restricted",
+    "allowed_domains": [
+        "amazon.com", "bestbuy.com", "walmart.com"
+    ]
+}</code></pre>
+
+<figure>
+<img src="images/diagram-06.png" alt="Networking Modes">
+<figcaption>Image by Author — Unrestricted vs restricted networking</figcaption>
+</figure>
+
+<p>The cloud container comes with Python, Node.js, and Go pre-installed. If you need additional packages, you can specify them in the environment config or let the agent install them via bash during the session.</p>
+
+<p>Like the Agent, the Environment is reusable. Create it once, reference it by ID across many sessions.</p>
+
+<hr>
+
+<h2>Step 3: Start a Session and Send Work</h2>
+
+<p>This is where compute begins. A Session pairs your Agent with your Environment and starts the clock.</p>
+
+<figure>
+<img src="images/diagram-07.png" alt="Session Lifecycle">
+<figcaption>Image by Author — Five steps from creation to completion</figcaption>
+</figure>
+
+<p>First, create the session:</p>
+
+<pre><code class="language-python">session = client.beta.managed_agents.sessions.create(
+    agent=agent.id,
+    environment_id=environment.id,
+    title="Price comparison run"
+)
+
+print(f"Session ID: {session.id}")</code></pre>
+
+<p>Now send the product catalog as a user message. Here's a realistic catalog of 10 consumer electronics products with slightly inflated "your store" prices:</p>
+
+<pre><code class="language-python">catalog = """product_name,sku,your_price,category
+Apple AirPods Pro 2,APD-001,289.99,Audio
+Sony WH-1000XM5,SNY-002,378.00,Audio
+Dyson V15 Detect,DYS-003,749.99,Home
+Samsung Galaxy S25 Ultra,SAM-004,1349.00,Mobile
+Apple MacBook Air M4,APL-005,1249.00,Laptop
+LG C4 65-inch OLED TV,LGC-006,1899.00,TV
+Bose QuietComfort Ultra,BSE-007,429.99,Audio
+Nintendo Switch 2,NIN-008,449.99,Gaming
+Kindle Scribe 2,KDL-009,399.99,E-reader
+Google Pixel 9 Pro,GPX-010,1099.00,Mobile"""
+
+client.beta.managed_agents.sessions.events.create(
+    session_id=session.id,
+    events=[{
+        "type": "user.message",
+        "content": [{
+            "type": "text",
+            "text": f"""Here is my product catalog:\n\n{catalog}\n\n
+            Research competitor prices for each product across 
+            Amazon, Best Buy, and Walmart. Write the full analysis 
+            report to /mnt/session/outputs/price_report.md"""
+        }]
+    }]
+)</code></pre>
+
+<figure>
+<img src="images/diagram-08.png" alt="What Happens After You Send a Message">
+<figcaption>Image by Author — The sequence that fires after you send the event</figcaption>
+</figure>
+
+<p>When you send this event, the following sequence fires:</p>
+
+<ol>
+<li>The harness provisions a container from your Environment config</li>
+<li>Claude reads your message and plans its approach</li>
+<li>It executes tools (web search for each product, bash to write files) inside the sandbox</li>
+<li>Results stream back as server-sent events</li>
+<li>When done, the session status changes to <code>idle</code></li>
+</ol>
+
+<p>The agent decides the tool sequence autonomously. You don't orchestrate each step. You state the goal and the agent figures out how to get there.</p>
+
+<p>One powerful feature: you can send additional <code>user.message</code> events while the agent is working. This lets you steer mid-execution. If you see the agent going down the wrong path in the event stream, you can course-correct without restarting the session.</p>
+
+<hr>
+
+<h2>Step 4: Stream Events in Real Time</h2>
+
+<p>The event stream is your window into the agent's brain. Every tool call, every piece of text, every status change arrives as a server-sent event.</p>
+
+<figure>
+<img src="images/diagram-09.png" alt="Event Types Reference">
+<figcaption>Image by Author — The event types you'll use in every integration</figcaption>
+</figure>
+
+<p>Here's how to consume the stream in Python:</p>
+
+<pre><code class="language-python">import json
+
+stream = client.beta.managed_agents.sessions.events.stream(
+    session_id=session.id
+)
+
+for event in stream:
+    if event.type == "agent.message":
+        for block in event.content:
+            if block.type == "text":
+                print(block.text, end="", flush=True)
+    
+    elif event.type == "agent.tool_use":
+        print(f"\n🔧 [{event.name}]")
+    
+    elif event.type == "session.status_idle":
+        print("\n\nAgent finished.")
+        break</code></pre>
+
+<p>When you run this, you'll see output like:</p>
+
+<pre><code>I'll research competitor prices for each product. Let me start 
+with the audio category.
+
+🔧 [web_search]
+🔧 [web_search]
+
+For AirPods Pro 2, I found:
+- Amazon: $249.00
+- Best Buy: $249.99
+- Walmart: $234.00
+
+Your catalog price of $289.99 is 23.9% above the lowest 
+competitor price. This exceeds the 15% threshold.
+
+🔧 [web_search]
+...
+
+🔧 [bash]
+
+Agent finished.</code></pre>
+
+<figure>
+<img src="images/diagram-10.png" alt="Event Stream Flow">
+<figcaption>Image by Author — A real event sequence from the price monitor</figcaption>
+</figure>
+
+<p>Three event types matter most. <code>agent.message</code> carries Claude's text output (reasoning, findings, status updates). <code>agent.tool_use</code> fires when the agent calls a tool (web search, bash, file write). <code>session.status_idle</code> signals the agent has finished all work.</p>
+
+<p>The full event history is also persisted server-side. You can fetch it after the fact:</p>
+
+<pre><code class="language-python">events = client.beta.managed_agents.sessions.events.list(
+    session_id=session.id
+)</code></pre>
+
+<p>This is useful for debugging, auditing, or replaying what the agent did.</p>
+
+<hr>
+
+<h2>Step 5: Retrieve the Output</h2>
+
+<p>The agent writes its deliverables to <code>/mnt/session/outputs/</code> inside the container. You retrieve them through the Files API.</p>
+
+<pre><code class="language-python">files = client.beta.managed_agents.files.list(
+    scope_id=session.id
+)
+
+for f in files.data:
+    print(f"{f.filename} ({f.size_bytes} bytes)")
+    
+    content = client.beta.managed_agents.files.content(
+        file_id=f.id
+    )
+    
+    with open(f.filename, "wb") as out:
+        out.write(content)</code></pre>
+
+<figure>
+<img src="images/diagram-11.png" alt="File Retrieval Flow">
+<figcaption>Image by Author — Output files persist even through disconnections</figcaption>
+</figure>
+
+<p>The output file persists even if your connection to the event stream drops. This is a direct benefit of the session-as-durable-log architecture. The agent's work isn't lost when your laptop goes to sleep.</p>
+
+<p>At this point, you have a working competitive price monitor. Five API calls (create agent, create environment, create session, send event, retrieve files) and roughly 30 lines of Python.</p>
+
+<p>But here's the question that separates a demo from a product: <strong>how do you know the output is good?</strong></p>
+
+<hr>
+
+<h2>Step 6: Test It (The Part Nobody Is Talking About)</h2>
+
+<p>Running the agent once and reading the report manually works for a demo. It doesn't work when you're running this daily across 500 products or deploying it for a client.</p>
+
+<p>The typical answer is to build your own evaluation layer: parse the output, write assertions, maybe use another LLM as a judge. That's weeks of work.</p>
+
+<p>Managed Agents has something better built in. It's called <strong>Outcomes</strong>, it's in research preview, and it's the most underreported feature of this entire launch.</p>
+
+<figure>
+<img src="images/diagram-12.png" alt="The Outcomes Architecture">
+<figcaption>Image by Author — Working agent and independent grader in separate context windows</figcaption>
+</figure>
+
+<h3>How Outcomes Work</h3>
+
+<p>Instead of sending a <code>user.message</code>, you send a <code>user.define_outcome</code> event. It has three parts:</p>
+
+<ol>
+<li><strong>Description</strong>: what the agent should produce</li>
+<li><strong>Rubric</strong>: a markdown document defining what "good" looks like, criterion by criterion</li>
+<li><strong>Max iterations</strong>: how many times the agent can revise before the grader gives up</li>
+</ol>
+
+<p>When you define an outcome, the harness provisions a <strong>separate grader</strong>. This grader runs in its own context window, completely independent from the working agent. It can't be influenced by the agent's reasoning or implementation choices. After the agent finishes a draft, the grader evaluates the output against the rubric and returns one of four results:</p>
+
+<ul>
+<li><code>satisfied</code>: all criteria met. Session goes idle.</li>
+<li><code>needs_revision</code>: specific gaps identified. The agent gets the feedback and tries again.</li>
+<li><code>max_iterations_reached</code>: ran out of attempts.</li>
+<li><code>failed</code>: the rubric fundamentally doesn't match the task.</li>
+</ul>
+
+<figure>
+<img src="images/diagram-13.png" alt="The Evaluation Loop">
+<figcaption>Image by Author — Agent works, grader evaluates, agent revises. Repeat until satisfied.</figcaption>
+</figure>
+
+<h3>Write the Rubric</h3>
+
+<p>The rubric is the most important artifact in this entire workflow. It transforms "does this look right?" into a structured, repeatable quality gate.</p>
+
+<figure>
+<img src="images/diagram-14.png" alt="Rubric Design Principles">
+<figcaption>Image by Author — Write criteria the grader can objectively verify</figcaption>
+</figure>
+
+<p>Here's the rubric for our price monitor:</p>
+
+<pre><code class="language-python">rubric = """
+# Competitive Price Report Rubric
+
+## Coverage
+- All 10 products from the catalog are included
+- At least 2 out of 3 retailers have prices for each product
+- Products are grouped by category
+
+## Data Quality
+- Each price includes the retailer name and source
+- Prices are in USD with two decimal places
+- The date of the price check is stated
+
+## Analysis
+- A summary table lists all products with your price, 
+  lowest competitor price, and percentage difference
+- Products exceeding the 15% threshold are clearly flagged
+- At least 3 products should be flagged as overpriced 
+  (given the inflated catalog prices)
+
+## Recommendations
+- Each flagged product includes a specific 
+  recommended price adjustment
+- The total potential revenue impact is estimated
+
+## Format
+- Output is valid markdown
+- The summary table is properly formatted
+- Report is under 2000 words
+"""</code></pre>
+
+<p>Each criterion is something the grader can objectively verify. "Data quality" isn't "are the prices accurate?" (the grader can't check that). It's "are prices formatted correctly and attributed to sources?" (the grader can check that). Write rubrics around verifiable structure and completeness, not factual accuracy the grader has no way to confirm.</p>
+
+<h3>Run the Outcome</h3>
+
+<pre><code class="language-python"># Create a new session for the outcome-based run
+session = client.beta.managed_agents.sessions.create(
+    agent=agent.id,
+    environment_id=environment.id,
+    title="Price monitor - graded run"
+)
+
+# Define the outcome (agent starts working immediately)
+client.beta.managed_agents.sessions.events.create(
+    session_id=session.id,
+    events=[{
+        "type": "user.define_outcome",
+        "description": f"""Analyze this product catalog and produce 
+        a competitive pricing report:\n\n{catalog}""",
+        "rubric": {"type": "text", "content": rubric},
+        "max_iterations": 3
+    }]
+)</code></pre>
+
+<p>Now stream the events and watch the evaluation cycle:</p>
+
+<pre><code class="language-python">for event in stream:
+    if event.type == "span.outcome_evaluation_start":
+        print(f"\n📋 Grader evaluating (iteration {event.iteration})...")
+    
+    elif event.type == "span.outcome_evaluation_end":
+        print(f"Result: {event.result}")
+        print(f"Explanation: {event.explanation}")
+        
+        if event.result == "satisfied":
+            print("✅ All criteria met.")
+            break</code></pre>
+
+<p>A typical run looks like this:</p>
+
+<p><strong>Iteration 0:</strong> The agent produces a first draft. The grader finds that the recommendations section is missing revenue impact estimates. Result: <code>needs_revision</code>.</p>
+
+<p><strong>Iteration 1:</strong> The agent reads the grader's feedback, adds revenue impact calculations. The grader finds all criteria met. Result: <code>satisfied</code>.</p>
+
+<figure>
+<img src="images/diagram-15.png" alt="Sample Evaluation Timeline">
+<figcaption>Image by Author — Two iterations to satisfaction for the price monitor</figcaption>
+</figure>
+
+<p>The grader's <code>explanation</code> field gives you a per-criterion breakdown. You can log this, alert on it, or use it to refine your rubric over time.</p>
+
+<h3>Check the Final Status Programmatically</h3>
+
+<p>For automation (CI pipelines, scheduled runs, monitoring), poll the session:</p>
+
+<pre><code class="language-python">session_status = client.beta.managed_agents.sessions.retrieve(
+    session_id=session.id
+)
+
+for eval in session_status.outcome_evaluations:
+    print(f"{eval.outcome_id}: {eval.result}")</code></pre>
+
+<p>This is the foundation of automated agent testing. Write a rubric. Run the outcome. Check <code>result == "satisfied"</code>. That's your assertion.</p>
+
+<hr>
+
+<h2>What This Costs</h2>
+
+<p>Let's do the math for our price monitor. A single run with 10 products involves roughly:</p>
+
+<ul>
+<li><strong>Input tokens</strong>: ~50,000 (system prompt + catalog + web search results + grader context)</li>
+<li><strong>Output tokens</strong>: ~15,000 (agent reasoning + report + grader evaluation)</li>
+<li><strong>Active runtime</strong>: ~8 minutes (web searches take time)</li>
+<li><strong>Web searches</strong>: ~30 (3 retailers × 10 products)</li>
+</ul>
+
+<p>Using Claude Sonnet 4.6 pricing:</p>
+
+<table>
+<tr><th>Component</th><th>Cost</th></tr>
+<tr><td>Input tokens (50K × $3/M)</td><td>$0.15</td></tr>
+<tr><td>Output tokens (15K × $15/M)</td><td>$0.23</td></tr>
+<tr><td>Runtime (0.13 hrs × $0.08/hr)</td><td>$0.01</td></tr>
+<tr><td>Web search (30 × $0.01)</td><td>$0.30</td></tr>
+<tr><td><strong>Total per run</strong></td><td><strong>~$0.69</strong></td></tr>
+</table>
+
+<p>With prompt caching (which the harness applies automatically), input token costs drop further. Cache reads are 90% cheaper than fresh input.</p>
+
+<p>For context, running this yourself would require a container orchestration platform, a web scraping service, session state storage, and monitoring. Even a minimal setup on AWS costs $50-100/month in fixed infrastructure before you process a single product.</p>
+
+<p>The honest take: $0.69 per run is cheap for what you get. The cost driver to watch is web search volume. If you scale to 500 products, that's $15 in search costs alone per run.</p>
+
+<hr>
+
+<h2>Recap and Next Steps</h2>
+
+<p><strong>What you built:</strong> A competitive price monitor that takes a product catalog, researches prices across real retailer websites, and produces a structured pricing analysis. Five API calls and ~30 lines of Python.</p>
+
+<p><strong>The key insight:</strong> The Outcomes system transforms agent testing from "run it and read the output" into a structured, automated quality gate. The grader is architecturally isolated from the working agent, uses its own context window, and provides per-criterion feedback that drives iterative improvement.</p>
+
+<p><strong>What to try this week:</strong> Take your own use case. Write a rubric for it. Run the Outcomes loop. See if the grader catches what you'd catch manually. That's the moment it clicks.</p>
+
+<h3>What's Coming</h3>
+
+<p>Three features are in research preview (request access separately):</p>
+
+<ul>
+<li><strong>Multi-agent coordination</strong>: one agent spawns and directs other agents to parallelize work</li>
+<li><strong>Memory</strong>: persistent context across sessions, so the agent learns from previous runs</li>
+<li><strong>MCP server integration</strong>: connect agents to external tools via the Model Context Protocol</li>
+</ul>
+
+<hr>
+
+<h2>Credits and Further Reading</h2>
+
+<ul>
+<li><a href="https://platform.claude.com/docs/en/managed-agents/overview">Claude Managed Agents docs</a>: the official reference for all endpoints and configuration options</li>
+<li><a href="https://www.anthropic.com/engineering/managed-agents">Scaling Managed Agents: Decoupling the brain from the hands</a>: Anthropic's engineering blog post on the architecture decisions behind Managed Agents</li>
+<li><a href="https://platform.claude.com/docs/en/managed-agents/define-outcomes">Define Outcomes</a>: the complete reference for the rubric and grading system</li>
+<li><a href="https://claude.com/blog/claude-managed-agents">Managed Agents launch announcement</a>: official blog post with early adopter case studies (Notion, Asana, Sentry)</li>
+<li><a href="https://platform.claude.com/docs/en/about-claude/pricing">Managed Agents pricing</a>: full pricing breakdown including token rates, runtime, and web search costs</li>
+</ul>
+
+</body>
+</html>
